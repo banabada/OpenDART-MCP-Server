@@ -14,7 +14,9 @@ export interface DocumentText {
   headings: DocumentHeading[];
 }
 
-const BLOCK_TAGS = new Set(["P", "TR", "TABLE", "TITLE", "BR", "PGBRK", "LIBRARY", "COVER-TITLE"]);
+const BLOCK_TAGS = new Set([
+  "P", "TR", "TABLE", "TABLE-GROUP", "TITLE", "BR", "PGBRK", "LIBRARY", "COVER-TITLE", "IMAGE",
+]);
 const CELL_TAGS = new Set(["TD", "TH", "TE", "TU"]);
 
 function decodeEntities(s: string): string {
@@ -48,11 +50,15 @@ export function dartXmlToText(xml: string): { text: string; headings: DocumentHe
   const sectionStack: number[] = [];
   const headings: DocumentHeading[] = [];
   let titleBuf: string[] | null = null;
+  let cellDepth = 0;
+  let inImg = false;
   let m: RegExpExecArray | null;
 
   while ((m = tokenRe.exec(body)) !== null) {
     const [, closing, rawName, , selfClosing, textPart] = m;
     if (textPart !== undefined) {
+      // <IMG> holds only the image file name, which is not filing text.
+      if (inImg) continue;
       const t = decodeEntities(textPart.replace(/[ \t\r\n]+/g, " "));
       if (titleBuf) titleBuf.push(t);
       else if (t.trim()) push(t);
@@ -80,9 +86,32 @@ export function dartXmlToText(xml: string): { text: string; headings: DocumentHe
       }
       continue;
     }
-    if (closing || selfClosing) {
-      if (CELL_TAGS.has(name)) push(" | ");
-      else if (BLOCK_TAGS.has(name)) push("\n");
+    if (name === "IMG") {
+      inImg = !closing && !selfClosing;
+      continue;
+    }
+    if (name === "IMG-CAPTION") {
+      if (selfClosing) continue;
+      push(closing ? "]\n" : "\n[그림: ");
+      continue;
+    }
+    if (CELL_TAGS.has(name)) {
+      if (closing || selfClosing) {
+        push(" | ");
+        if (closing) cellDepth = Math.max(0, cellDepth - 1);
+      } else {
+        cellDepth++;
+      }
+      continue;
+    }
+    if (BLOCK_TAGS.has(name)) {
+      // Filings do not always close paragraphs (<P>, <BR>), so a block break is
+      // emitted on opening tags as well. Inside a table cell a break becomes a
+      // space so the row stays on one line.
+      if (name === "TR") {
+        if (closing || selfClosing) push("\n");
+      } else if (name === "TABLE") push("\n");
+      else push(cellDepth > 0 ? " " : "\n");
     }
   }
 
